@@ -32,6 +32,7 @@ from transformers import (
     GenerationConfig,
     AutoModelForSequenceClassification,
 )
+from tools import api_llm
 
 jieba.setLogLevel("ERROR")
 
@@ -138,7 +139,7 @@ class Rag:
             chunk_size: int = 250,
             chunk_overlap: int = 0,
             rerank_model_name_or_path: str = None,
-            enable_history: bool = False,
+            enable_history: bool = True, # False,
             num_expand_context_chunk: int = 2,
             similarity_top_k: int = 10,
             rerank_top_k: int = 3,
@@ -226,33 +227,34 @@ class Rag:
             device_map = "auto"
         model_class, tokenizer_class = MODEL_CLASSES[gen_model_type]
         tokenizer = tokenizer_class.from_pretrained(gen_model_name_or_path, trust_remote_code=True)
-        model = model_class.from_pretrained(
-            gen_model_name_or_path,
-            load_in_8bit=int8 if gen_model_type not in ['baichuan', 'chatglm'] else False,
-            load_in_4bit=int4 if gen_model_type not in ['baichuan', 'chatglm'] else False,
-            torch_dtype="auto",
-            device_map=device_map,
-            trust_remote_code=True,
-        )
-        if self.device == torch.device('cpu'):
-            model.float()
-        if gen_model_type in ['baichuan', 'chatglm']:
-            if int4:
-                model = model.quantize(4).cuda()
-            elif int8:
-                model = model.quantize(8).cuda()
-        try:
-            model.generation_config = GenerationConfig.from_pretrained(gen_model_name_or_path, trust_remote_code=True)
-        except Exception as e:
-            logger.warning(f"Failed to load generation config from {gen_model_name_or_path}, {e}")
-        if peft_name:
-            model = PeftModel.from_pretrained(
-                model,
-                peft_name,
-                torch_dtype="auto",
-            )
-            logger.info(f"Loaded peft model from {peft_name}")
-        model.eval()
+        model = "api_llm"
+        # model = model_class.from_pretrained(
+        #     gen_model_name_or_path,
+        #     load_in_8bit=int8 if gen_model_type not in ['baichuan', 'chatglm'] else False,
+        #     load_in_4bit=int4 if gen_model_type not in ['baichuan', 'chatglm'] else False,
+        #     torch_dtype="auto",
+        #     device_map=device_map,
+        #     trust_remote_code=True,
+        # )
+        # if self.device == torch.device('cpu'):
+        #     model.float()
+        # if gen_model_type in ['baichuan', 'chatglm']:
+        #     if int4:
+        #         model = model.quantize(4).cuda()
+        #     elif int8:
+        #         model = model.quantize(8).cuda()
+        # try:
+        #     model.generation_config = GenerationConfig.from_pretrained(gen_model_name_or_path, trust_remote_code=True)
+        # except Exception as e:
+        #     logger.warning(f"Failed to load generation config from {gen_model_name_or_path}, {e}")
+        # if peft_name:
+        #     model = PeftModel.from_pretrained(
+        #         model,
+        #         peft_name,
+        #         torch_dtype="auto",
+        #     )
+        #     logger.info(f"Loaded peft model from {peft_name}")
+        # model.eval()
         return model, tokenizer
 
     def _get_chat_input(self):
@@ -278,22 +280,23 @@ class Rag:
             repetition_penalty=1.0,
             context_len=2048
     ):
-        streamer = TextIteratorStreamer(self.tokenizer, timeout=60.0, skip_prompt=True, skip_special_tokens=True)
-        input_ids = self._get_chat_input()
-        max_src_len = context_len - max_new_tokens - 8
-        input_ids = input_ids[-max_src_len:]
-        generation_kwargs = dict(
-            input_ids=input_ids,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            do_sample=True,
-            repetition_penalty=repetition_penalty,
-            streamer=streamer,
-        )
-        thread = Thread(target=self.gen_model.generate, kwargs=generation_kwargs)
-        thread.start()
+        pass
+        # streamer = TextIteratorStreamer(self.tokenizer, timeout=60.0, skip_prompt=True, skip_special_tokens=True)
+        # input_ids = self._get_chat_input()
+        # max_src_len = context_len - max_new_tokens - 8
+        # input_ids = input_ids[-max_src_len:]
+        # generation_kwargs = dict(
+        #     input_ids=input_ids,
+        #     max_new_tokens=max_new_tokens,
+        #     temperature=temperature,
+        #     do_sample=True,
+        #     repetition_penalty=repetition_penalty,
+        #     streamer=streamer,
+        # )
+        # thread = Thread(target=self.gen_model.generate, kwargs=generation_kwargs)
+        # thread.start()
 
-        yield from streamer
+        # yield from streamer
 
     def add_corpus(self, files: Union[str, List[str]]):
         """Load document files."""
@@ -436,6 +439,20 @@ class Rag:
                 reference_results = new_reference_results
         return reference_results
 
+
+    def format_history(self):
+        pass
+        history_list2 = [
+            {"role": "system", "content": "You are a helpful assistant."},
+        ]
+        for item_chat_group in self.history:
+            pass
+            user_chat, llm_chat = item_chat_group
+            history_list2.append({"role": "user", "content": user_chat})
+            if llm_chat:
+                history_list2.append({"role": "assistant", "content": llm_chat})
+        return history_list2
+
     def predict_stream(
             self,
             query: str,
@@ -460,14 +477,21 @@ class Rag:
         logger.debug(f"prompt: {prompt}")
         self.history.append([prompt, ''])
         response = ""
-        for new_text in self.stream_generate_answer(
-                max_new_tokens=max_length,
-                temperature=temperature,
-                context_len=context_len,
-        ):
-            if new_text != stop_str:
-                response += new_text
-                yield response
+        if False:
+            for new_text in self.stream_generate_answer(
+                    max_new_tokens=max_length,
+                    temperature=temperature,
+                    context_len=context_len,
+            ):
+                if new_text != stop_str:
+                    response += new_text
+                    yield response
+        else:
+            from tools import api_llm_stream
+            for new_text in api_llm_stream(history_list=self.format_history()):
+                if new_text != stop_str:
+                    response += new_text
+                    yield response
 
     def predict(
             self,
@@ -493,12 +517,15 @@ class Rag:
         logger.debug(f"prompt: {prompt}")
         self.history.append([prompt, ''])
         response = ""
-        for new_text in self.stream_generate_answer(
-                max_new_tokens=max_length,
-                temperature=temperature,
-                context_len=context_len,
-        ):
-            response += new_text
+        if True:
+            for new_text in self.stream_generate_answer(
+                    max_new_tokens=max_length,
+                    temperature=temperature,
+                    context_len=context_len,
+            ):
+                response += new_text
+        else:
+            response = api_llm()
         response = response.strip()
         self.history[-1][1] = response
         return response, reference_results
